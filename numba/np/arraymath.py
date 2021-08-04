@@ -2,7 +2,6 @@
 Implementation of math operations on Array objects.
 """
 
-
 import math
 from collections import namedtuple
 from enum import IntEnum
@@ -29,6 +28,7 @@ from numba.core.extending import intrinsic
 from numba.core.errors import RequireLiteralValue, TypingError
 from numba.core.overload_glue import glue_lowering
 from numba.cpython.unsafe.tuple import tuple_setitem
+import sys
 
 
 def _check_blas():
@@ -157,23 +157,80 @@ def _gen_index_tuple(tyctx, shape_tuple, value, axis):
     return function_sig, codegen
 
 
+def has_literal_value(var, value):
+    """Used during typing to check that variable var is a Numba literal value equal to value"""
+
+    if not isinstance(var, types.Literal):
+        return False
+
+    if value is None:
+        return isinstance(var, types.NoneType) or var.literal_value is value
+    elif isinstance(value, type(bool)):
+        return var.literal_value is value
+    else:
+        return var.literal_value == value
+
 #----------------------------------------------------------------------------
 # Basic stats and aggregates
 
-@lower_builtin(np.sum, types.Array)
-@lower_builtin("array.sum", types.Array)
-def array_sum(context, builder, sig, args):
-    zero = sig.return_type(0)
+@overload_method(types.Array, 'sum', jit_options={"parallel":False}, prefer_literal=True)
+def np_arr_sum_overload(self, axis=None, dtype=None):
+    my_dtype = self.dtype
+    M = 64 if sys.maxsize > 2**32 else 32
+    if isinstance(my_dtype, types.Integer) and my_dtype.bitwidth < M:
+        default_int  = np.int64 if M == 64 else np.int32
+        default_uint = np.uint64 if M == 64 else np.uint32
+        my_dtype = default_int if my_dtype.signed else default_uint
+    if not (isinstance(dtype, (types.Omitted, types.NoneType)) or dtype is None):
+        my_dtype = dtype.instance_type if not isinstance(dtype, types.npytypes.DType) else dtype.dtype
+    elif isinstance(self.dtype, types.scalars.Boolean): my_dtype = types.intp
+    is_special_case = any((isinstance(self.dtype, types.Float) and isinstance(my_dtype, types.Integer),
+                         (isinstance(self.dtype, types.Float) and isinstance(my_dtype, types.Float) or isinstance(self.dtype, types.Integer) and isinstance(my_dtype, types.Integer)) and self.dtype.bitwidth > my_dtype.bitwidth,
+                          isinstance(self.dtype, types.Integer) and isinstance(my_dtype, types.Integer) and (self.dtype.signed and not my_dtype.signed and self.dtype.bitwidth <= my_dtype.bitwidth or not self.dtype.signed and my_dtype.signed and self.dtype.bitwidth == my_dtype.bitwidth == 64),
+                          isinstance(self.dtype, types.scalars.Boolean), isinstance(my_dtype, types.scalars.Boolean)))
+    is_literal_value = has_literal_value(axis, 0)
+    is_non_axis = not isinstance(axis, types.Integer)
+    flag = self.ndim == 1 or is_non_axis
+    def sum_impl(self, axis=None, dtype=None):
+        real_axis = axis
+        if not is_non_axis == True:
+            if real_axis < 0:
+                real_axis = self.ndim + axis
+            if real_axis < 0 or real_axis >= self.ndim:
+                raise ValueError("'axis' entry is out of bounds")
+        if flag == True:
+            res = np.zeros(shape = (1,), dtype = my_dtype)
+            for v in np.nditer(self.astype(my_dtype) if is_special_case else self):
+                res[0] += v.item()
+            return res[0]
+        self_shape = self.shape
+        ashape = list(self_shape)
+        ashape.pop(real_axis)
+        ashape_without_axis = _create_tuple_result_shape(ashape, self_shape)
+        res = np.zeros(ashape_without_axis, dtype=my_dtype)
+        temp = 0
+        if is_literal_value:
+            temp = self.astype(my_dtype) if is_special_case else self
+        else:
+            l = [i for i in range(len(self_shape))]
+            l.pop(real_axis)
+            tupl = (axis,)+_create_tuple_result_shape(l, self.shape)
+            transpose_array = np.transpose(self, tupl)
+            temp = transpose_array.astype(my_dtype) if is_special_case else transpose_array
+        for i in range(temp.shape[0]):
+            res += temp[i]
+        return res
+    return sum_impl
 
-    def array_sum_impl(arr):
-        c = zero
-        for v in np.nditer(arr):
-            c += v.item()
-        return c
 
-    res = context.compile_internal(builder, array_sum_impl, sig, args,
-                                   locals=dict(c=sig.return_type))
-    return impl_ret_borrowed(context, builder, sig.return_type, res)
+
+@overload(np.sum)
+def sum(a, axis=None, dtype=None):
+    if isinstance(a, types.Array):
+        def sum_impl(a, axis=None, dtype=None):
+            return a.sum(axis, dtype)
+        return sum_impl
+
 
 
 @register_jitable
@@ -246,107 +303,6 @@ def gen_sum_axis_impl(is_axis_const, const_axis_val, op, zero):
     return inner
 
 
-@lower_builtin(np.sum, types.Array, types.intp, types.DTypeSpec)
-@lower_builtin(np.sum, types.Array, types.IntegerLiteral, types.DTypeSpec)
-@lower_builtin("array.sum", types.Array, types.intp, types.DTypeSpec)
-@lower_builtin("array.sum", types.Array, types.IntegerLiteral, types.DTypeSpec)
-def array_sum_axis_dtype(context, builder, sig, args):
-    retty = sig.return_type
-    zero = getattr(retty, 'dtype', retty)(0)
-    # if the return is scalar in type then "take" the 0th element of the
-    # 0d array accumulator as the return value
-    if getattr(retty, 'ndim', None) is None:
-        op = np.take
-    else:
-        op = _array_sum_axis_nop
-    [ty_array, ty_axis, ty_dtype] = sig.args
-    is_axis_const = False
-    const_axis_val = 0
-    if isinstance(ty_axis, types.Literal):
-        # this special-cases for constant axis
-        const_axis_val = ty_axis.literal_value
-        # fix negative axis
-        if const_axis_val < 0:
-            const_axis_val = ty_array.ndim + const_axis_val
-        if const_axis_val < 0 or const_axis_val > ty_array.ndim:
-            raise ValueError("'axis' entry is out of bounds")
-
-        ty_axis = context.typing_context.resolve_value_type(const_axis_val)
-        axis_val = context.get_constant(ty_axis, const_axis_val)
-        # rewrite arguments
-        args = args[0], axis_val, args[2]
-        # rewrite sig
-        sig = sig.replace(args=[ty_array, ty_axis, ty_dtype])
-        is_axis_const = True
-
-    gen_impl = gen_sum_axis_impl(is_axis_const, const_axis_val, op, zero)
-    compiled = register_jitable(gen_impl)
-
-    def array_sum_impl_axis(arr, axis, dtype):
-        return compiled(arr, axis)
-
-    res = context.compile_internal(builder, array_sum_impl_axis, sig, args)
-    return impl_ret_new_ref(context, builder, sig.return_type, res)
-
-
-@lower_builtin(np.sum, types.Array,  types.DTypeSpec)
-@lower_builtin("array.sum", types.Array, types.DTypeSpec)
-def array_sum_dtype(context, builder, sig, args):
-    zero = sig.return_type(0)
-
-    def array_sum_impl(arr, dtype):
-        c = zero
-        for v in np.nditer(arr):
-            c += v.item()
-        return c
-
-    res = context.compile_internal(builder, array_sum_impl, sig, args,
-                                   locals=dict(c=sig.return_type))
-    return impl_ret_borrowed(context, builder, sig.return_type, res)
-
-
-@lower_builtin(np.sum, types.Array, types.intp)
-@lower_builtin(np.sum, types.Array, types.IntegerLiteral)
-@lower_builtin("array.sum", types.Array, types.intp)
-@lower_builtin("array.sum", types.Array, types.IntegerLiteral)
-def array_sum_axis(context, builder, sig, args):
-    retty = sig.return_type
-    zero = getattr(retty, 'dtype', retty)(0)
-    # if the return is scalar in type then "take" the 0th element of the
-    # 0d array accumulator as the return value
-    if getattr(retty, 'ndim', None) is None:
-        op = np.take
-    else:
-        op = _array_sum_axis_nop
-    [ty_array, ty_axis] = sig.args
-    is_axis_const = False
-    const_axis_val = 0
-    if isinstance(ty_axis, types.Literal):
-        # this special-cases for constant axis
-        const_axis_val = ty_axis.literal_value
-        # fix negative axis
-        if const_axis_val < 0:
-            const_axis_val = ty_array.ndim + const_axis_val
-        if const_axis_val < 0 or const_axis_val > ty_array.ndim:
-            raise ValueError("'axis' entry is out of bounds")
-
-        ty_axis = context.typing_context.resolve_value_type(const_axis_val)
-        axis_val = context.get_constant(ty_axis, const_axis_val)
-        # rewrite arguments
-        args = args[0], axis_val
-        # rewrite sig
-        sig = sig.replace(args=[ty_array, ty_axis])
-        is_axis_const = True
-
-    gen_impl = gen_sum_axis_impl(is_axis_const, const_axis_val, op, zero)
-    compiled = register_jitable(gen_impl)
-
-    def array_sum_impl_axis(arr, axis):
-        return compiled(arr, axis)
-
-    res = context.compile_internal(builder, array_sum_impl_axis, sig, args)
-    return impl_ret_new_ref(context, builder, sig.return_type, res)
-
 
 @lower_builtin(np.prod, types.Array)
 @lower_builtin("array.prod", types.Array)
@@ -418,6 +374,9 @@ def array_mean(context, builder, sig, args):
     res = context.compile_internal(builder, array_mean_impl, sig, args,
                                    locals=dict(c=sig.return_type))
     return impl_ret_untracked(context, builder, sig.return_type, res)
+
+
+
 
 
 @lower_builtin(np.var, types.Array)

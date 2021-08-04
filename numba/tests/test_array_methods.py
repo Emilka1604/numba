@@ -1101,14 +1101,14 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
              np.ones((7, 3), arr_dtype) * -5]
             for arr_dtype in all_dtypes]
 
-        out_dtypes = {np.dtype('float64'): [np.float64],
-                      np.dtype('float32'): [np.float64, np.float32],
-                      np.dtype('int64'): [np.float64, np.int64, np.float32],
-                      np.dtype('int32'): [np.float64, np.int64, np.float32, np.int32],
-                      np.dtype('uint32'): [np.float64, np.int64, np.float32],
-                      np.dtype('uint64'): [np.float64, np.int64],
+        out_dtypes = {np.dtype('float64'): [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32],
+                      np.dtype('float32'): [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32],
+                      np.dtype('int64'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('int32'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('uint32'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('uint64'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
                       np.dtype('complex64'): [np.complex64, np.complex128],
-                      np.dtype('complex128'): [np.complex128],
+                      np.dtype('complex128'): [np.complex128, np.complex64],
                       np.dtype(TIMEDELTA_M): [np.dtype(TIMEDELTA_M)]}
 
         for arr_list in all_test_arrays:
@@ -1132,14 +1132,14 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
              np.ones((7, 3), arr_dtype) * -5]
             for arr_dtype in all_dtypes]
 
-        out_dtypes = {np.dtype('float64'): [np.float64],
-                      np.dtype('float32'): [np.float64, np.float32],
-                      np.dtype('int64'): [np.float64, np.int64, np.float32],
-                      np.dtype('int32'): [np.float64, np.int64, np.float32, np.int32],
-                      np.dtype('uint32'): [np.float64, np.int64, np.float32],
-                      np.dtype('uint64'): [np.float64, np.uint64],
+        out_dtypes = {np.dtype('float64'): [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32],
+                      np.dtype('float32'): [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32],
+                      np.dtype('int64'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('int32'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('uint32'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('uint64'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
                       np.dtype('complex64'): [np.complex64, np.complex128],
-                      np.dtype('complex128'): [np.complex128],
+                      np.dtype('complex128'): [np.complex128, np.complex64],
                       np.dtype(TIMEDELTA_M): [np.dtype(TIMEDELTA_M)],
                       np.dtype(TIMEDELTA_Y): [np.dtype(TIMEDELTA_Y)]}
 
@@ -1147,6 +1147,42 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
             for arr in arr_list:
                 for out_dtype in out_dtypes[arr.dtype]:
                     for axis in (0, 1, 2):
+                        if axis > len(arr.shape) - 1:
+                            continue
+                        subtest_str = ("Testing np.sum with {} input and {} output "
+                                       .format(arr.dtype, out_dtype))
+                        with self.subTest(subtest_str):
+                            py_res = pyfunc(arr, axis=axis, dtype=out_dtype)
+                            nb_res = cfunc(arr, axis=axis, dtype=out_dtype)
+                            self.assertPreciseEqual(py_res, nb_res)
+
+    def test_sum_big_axis(self):
+        """ test sum with axis value more than 4 """
+        pyfunc = array_sum_axis_dtype_kws
+        cfunc = jit(nopython=True)(pyfunc)
+        all_dtypes = [np.float64, np.float32, np.int64, np.int32, np.uint32,
+                      np.uint64, np.complex64, np.complex128, TIMEDELTA_M]
+        all_test_arrays = [
+            [np.ones((7, 6, 5, 4, 3, 7), arr_dtype),
+             np.ones((4, 2, 5, 7, 6, 3, 8, 3, 2), arr_dtype)]
+            for arr_dtype in all_dtypes]
+
+        out_dtypes = {np.dtype('float64'): [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32],
+                      np.dtype('float32'): [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32],
+                      np.dtype('int64'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('int32'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('uint32'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('uint64'): [np.float64, np.int64, np.float32, np.int32, np.uint64, np.uint32],
+                      np.dtype('complex64'): [np.complex64, np.complex128],
+                      np.dtype('complex128'): [np.complex128, np.complex64],
+                      np.dtype(TIMEDELTA_M): [np.dtype(TIMEDELTA_M)],
+                      np.dtype(TIMEDELTA_Y): [np.dtype(TIMEDELTA_Y)]
+                      }
+
+        for arr_list in all_test_arrays:
+            for arr in arr_list:
+                for out_dtype in out_dtypes[arr.dtype]:
+                    for axis in (5, 8):
                         if axis > len(arr.shape) - 1:
                             continue
                         subtest_str = ("Testing np.sum with {} input and {} output "
@@ -1199,38 +1235,36 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
         a = np.ones((7, 6, 5, 4, 3))
         b = np.ones((4, 3))
         # BAD: axis > dimensions
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as raises:
             cfunc(b, 2)
-        # BAD: negative axis
-        with self.assertRaises(ValueError):
-            cfunc(a, -1)
-        # BAD: axis greater than 3
-        with self.assertRaises(ValueError):
-            cfunc(a, 4)
+        with self.assertRaises(raises.exception.__class__) as raises_:
+            pyfunc(b, 2)
+        self.assertIn("out of bounds", str(raises.exception))
+        self.assertIn("out of bounds", str(raises_.exception))
+        # BAD: negative axis out of range
+        with self.assertRaises(ValueError) as raises:
+            cfunc(a, -6)
+        with self.assertRaises(raises.exception.__class__) as raises_:
+            pyfunc(a, -6)
+        self.assertIn("out of bounds", str(raises.exception))
+        self.assertIn("out of bounds", str(raises_.exception))
 
-    def test_sum_const_negative(self):
+
+    def test_sum_negative_axis(self):
         # Exceptions leak references
         self.disable_leak_check()
 
-        @jit(nopython=True)
-        def foo(arr):
-            return arr.sum(axis=-3)
 
-        # ndim == 4, axis == -3, OK
+        @jit(nopython=True)
+        def foo(arr, axis):
+            return arr.sum(axis=axis)
+
+        # ndim == 4, axis == -1, OK
         a = np.ones((1, 2, 3, 4))
-        self.assertPreciseEqual(foo(a), foo.py_func(a))
+        self.assertPreciseEqual(foo(a, -1), foo.py_func(a, -1))
         # ndim == 3, axis == -3, OK
         a = np.ones((1, 2, 3))
-        self.assertPreciseEqual(foo(a), foo.py_func(a))
-        # ndim == 2, axis == -3, BAD
-        a = np.ones((1, 2))
-        with self.assertRaises(LoweringError) as raises:
-            foo(a)
-        errmsg = "'axis' entry is out of bounds"
-        self.assertIn(errmsg, str(raises.exception))
-        with self.assertRaises(ValueError) as raises:
-            foo.py_func(a)
-        self.assertIn("out of bounds", str(raises.exception))
+        self.assertPreciseEqual(foo(a, -3), foo.py_func(a, -3))
 
     def test_cumsum(self):
         pyfunc = array_cumsum
