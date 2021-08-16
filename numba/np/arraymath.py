@@ -160,20 +160,7 @@ def _gen_index_tuple(tyctx, shape_tuple, value, axis):
 #----------------------------------------------------------------------------
 # Basic stats and aggregates
 
-@lower_builtin(np.sum, types.Array)
-@lower_builtin("array.sum", types.Array)
-def array_sum(context, builder, sig, args):
-    zero = sig.return_type(0)
 
-    def array_sum_impl(arr):
-        c = zero
-        for v in np.nditer(arr):
-            c += v.item()
-        return c
-
-    res = context.compile_internal(builder, array_sum_impl, sig, args,
-                                   locals=dict(c=sig.return_type))
-    return impl_ret_borrowed(context, builder, sig.return_type, res)
 
 
 @register_jitable
