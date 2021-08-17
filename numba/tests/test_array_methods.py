@@ -270,6 +270,9 @@ def array_dot_chain(a, b):
 def array_ctor(n, dtype):
     return np.ones(n, dtype=dtype)
 
+def array_tolist(arr):
+    return arr.tolist()
+
 
 class TestArrayMethods(MemoryLeakMixin, TestCase):
     """
@@ -1471,6 +1474,18 @@ class TestArrayMethods(MemoryLeakMixin, TestCase):
         np.testing.assert_array_equal(pyfunc(*args), cfunc(*args))
         args = n, np.dtype('f4')
         np.testing.assert_array_equal(pyfunc(*args), cfunc(*args))
+
+    def test_array_tolist(self):
+        pyfunc = array_tolist
+        cfunc = jit(nopython=True)(pyfunc)
+        arr_dtypes = [np.float64, np.float32, np.int64, np.int32, np.uint64, np.uint32, np.complex64, np.complex128, 
+                    np.dtype(TIMEDELTA_M), np.dtype(TIMEDELTA_Y)]
+        all_test_array = [[np.ones((7, 6, 5, 4, 3), arr_dtype), np.ones(1, arr_dtype)] for arr_dtype in arr_dtypes]
+        for arr_list in all_test_array:
+            for arr in arr_list:
+                py_res = pyfunc(arr)
+                nb_res = cfunc(arr)
+                self.assertPreciseEqual(py_res, nb_res)
 
 
 class TestArrayComparisons(TestCase):

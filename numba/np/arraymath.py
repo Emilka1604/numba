@@ -383,6 +383,17 @@ def array_cumsum(context, builder, sig, args):
     return impl_ret_new_ref(context, builder, sig.return_type, res)
 
 
+@overload_method(types.Array, 'tolist')
+def np_tolist_overload(self):
+    def tolist_impl(self):
+        res = [self[0]] if self.ndim == 1 else [self[0].tolist()]
+        for i in range(1,self.shape[0]):
+            a = self[i] if self.ndim == 1 else self[i].tolist()
+            res.append(a)
+        return res
+    return tolist_impl
+
+
 @lower_builtin(np.cumprod, types.Array)
 @lower_builtin("array.cumprod", types.Array)
 def array_cumprod(context, builder, sig, args):
