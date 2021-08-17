@@ -29,7 +29,12 @@ from numba.core.extending import intrinsic
 from numba.core.errors import RequireLiteralValue, TypingError
 from numba.core.overload_glue import glue_lowering
 from numba.cpython.unsafe.tuple import tuple_setitem
-
+from numba.core import utils
+from numba import prange
+from numba import parfors
+from numba import pndindex
+from numba import njit
+import sys
 
 def _check_blas():
     # Checks if a BLAS is available so e.g. dot will work
@@ -402,22 +407,32 @@ def array_cumprod(context, builder, sig, args):
     return impl_ret_new_ref(context, builder, sig.return_type, res)
 
 
-@lower_builtin(np.mean, types.Array)
-@lower_builtin("array.mean", types.Array)
-def array_mean(context, builder, sig, args):
-    zero = sig.return_type(0)
+@overload_method(types.Array, 'mean')
+def mean_overload(self, axis = None, dtype = None):
+    my_dtype = self.dtype
+    if not (isinstance(dtype, (types.Omitted, types.NoneType)) or dtype is None):
+        my_dtype = dtype.instance_type if not isinstance(dtype, types.npytypes.DType) else dtype.dtype
+    elif isinstance(self.dtype, (types.scalars.Boolean, types.Integer)): my_dtype = types.float64
+    has_axis = isinstance(axis, types.Integer)
+    is_timedelta = isinstance(my_dtype, types.scalars.NPTimedelta)
+    def mean_impl(self, axis = None, dtype = None):
+        sum_res = self.sum(axis, my_dtype)
+        if not has_axis or self.ndim == 1:
+            sum_res /= self.size
+            if not is_timedelta: sum_res = my_dtype(sum_res)
+        else:
+            for i in pndindex(sum_res.shape):
+                sum_res[i] /= self.shape[axis]
+        return sum_res
+    return mean_impl
 
-    def array_mean_impl(arr):
-        # Can't use the naive `arr.sum() / arr.size`, as it would return
-        # a wrong result on integer sum overflow.
-        c = zero
-        for v in np.nditer(arr):
-            c += v.item()
-        return c / arr.size
 
-    res = context.compile_internal(builder, array_mean_impl, sig, args,
-                                   locals=dict(c=sig.return_type))
-    return impl_ret_untracked(context, builder, sig.return_type, res)
+@overload(np.mean)
+def mean(a, axis=None, dtype=None):
+    if isinstance(a, types.Array):
+        def mean_impl(a, axis=None, dtype=None):
+            return a.mean(axis, dtype)
+        return mean_impl
 
 
 @lower_builtin(np.var, types.Array)
