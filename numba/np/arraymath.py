@@ -29,7 +29,12 @@ from numba.core.extending import intrinsic
 from numba.core.errors import RequireLiteralValue, TypingError
 from numba.core.overload_glue import glue_lowering
 from numba.cpython.unsafe.tuple import tuple_setitem
-
+from numba.core import utils
+from numba import prange
+from numba import parfors
+from numba import pndindex
+from numba import njit
+import sys
 
 def _check_blas():
     # Checks if a BLAS is available so e.g. dot will work
@@ -346,6 +351,15 @@ def array_sum_axis(context, builder, sig, args):
 
     res = context.compile_internal(builder, array_sum_impl_axis, sig, args)
     return impl_ret_new_ref(context, builder, sig.return_type, res)
+
+@overload(np.array)
+def np_array_overload(array):
+    def array_impl(array):
+        res = np.empty((len(array),)+array[0].shape, dtype=array[0].dtype)
+        for i in prange(res.shape[0]):
+            res[i] = array[i]
+        return res
+    return array_impl
 
 
 @lower_builtin(np.prod, types.Array)
